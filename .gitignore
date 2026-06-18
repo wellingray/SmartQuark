@@ -1,0 +1,25 @@
+# Python virtual environment
+.venv38/
+
+# PyInstaller build artifacts
+build/
+dist/
+*.spec
+!SmartQuark.spec
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Local config (may contain cookies)
+gui_config.json
+
+# IDE
+.vscode/
+.idea/
+
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store

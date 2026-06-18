@@ -1,0 +1,4 @@
+# SmartQuark dependencies
+# Compatible with Python 3.8.10
+requests>=2.25.0,<3.0.0
+openpyxl>=3.0.0,<4.0.0
