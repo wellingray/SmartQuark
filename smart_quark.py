@@ -13,7 +13,9 @@ import tkinter as tk
 from tkinter import ttk
 from tkinter import messagebox
 from tkinter import filedialog
+from tkinter import font as tkfont
 from datetime import datetime
+
 
 # 强制标准输出采用 UTF-8 编码，若为 None (如 PyInstaller --noconsole 模式) 则重定向到 devnull
 if sys.stdout is None:
@@ -914,11 +916,27 @@ class QuarkGUITool:
         self.config = self.load_config()
 
         # UI 字体及颜色配置
-        self.font_title = ("Microsoft YaHei", 10, "bold")
-        self.font_normal = ("Microsoft YaHei", 10)
+        self.base_font_size = self.config.get("font_size", 10)
+        self.font_title = tkfont.Font(family="Microsoft YaHei", size=self.base_font_size, weight="bold")
+        self.font_normal = tkfont.Font(family="Microsoft YaHei", size=self.base_font_size)
+        self.font_button = tkfont.Font(family="Microsoft YaHei", size=self.base_font_size + 1, weight="bold")
         self.bg_color = "#f4f5f7"
         
         self.root.configure(bg=self.bg_color)
+        
+        # 配置 ttk 全局字体样式
+        self.style = ttk.Style()
+        self.style.configure(".", font=self.font_normal)
+        self.style.configure("TButton", font=self.font_normal)
+        self.style.configure("TEntry", font=self.font_normal)
+        self.style.configure("TCheckbutton", font=self.font_normal)
+        
+        # 绑定快捷键进行缩放
+        self.root.bind("<Control-equal>", self.zoom_in)
+        self.root.bind("<Control-plus>", self.zoom_in)
+        self.root.bind("<Control-minus>", self.zoom_out)
+        self.root.bind("<Control-0>", self.reset_zoom)
+        self.root.bind("<Control-MouseWheel>", self.on_mousewheel_zoom)
         
         self.transfer_thread = None
         self.stop_requested = False
@@ -973,11 +991,20 @@ class QuarkGUITool:
         btn_frame = tk.Frame(self.root, bg=self.bg_color)
         btn_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=15, pady=(0, 15))
 
-        self.start_btn = tk.Button(btn_frame, text="开始批量转存与广告清理", font=("Microsoft YaHei", 11, "bold"), bg="#28a745", fg="white", activebackground="#218838", activeforeground="white", relief=tk.FLAT, pady=8, command=self.start_transfer)
-        self.start_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+        # 缩放控制面板
+        zoom_frame = tk.Frame(btn_frame, bg=self.bg_color)
+        zoom_frame.pack(side=tk.RIGHT, padx=(10, 0))
 
-        self.stop_btn = tk.Button(btn_frame, text="停止任务", font=("Microsoft YaHei", 11, "bold"), bg="#dc3545", fg="white", activebackground="#c82333", activeforeground="white", relief=tk.FLAT, pady=8, state="disabled", width=15, command=self.stop_transfer)
+        tk.Label(zoom_frame, text="缩放:", font=self.font_normal, bg=self.bg_color).pack(side=tk.LEFT, padx=2)
+        ttk.Button(zoom_frame, text="＋", width=3, command=self.zoom_in).pack(side=tk.LEFT, padx=1)
+        ttk.Button(zoom_frame, text="－", width=3, command=self.zoom_out).pack(side=tk.LEFT, padx=1)
+        ttk.Button(zoom_frame, text="重置", width=4, command=self.reset_zoom).pack(side=tk.LEFT, padx=1)
+
+        self.stop_btn = tk.Button(btn_frame, text="停止任务", font=self.font_button, bg="#dc3545", fg="white", activebackground="#c82333", activeforeground="white", relief=tk.FLAT, pady=8, state="disabled", width=15, command=self.stop_transfer)
         self.stop_btn.pack(side=tk.RIGHT, padx=(5, 0))
+
+        self.start_btn = tk.Button(btn_frame, text="开始批量转存与广告清理", font=self.font_button, bg="#28a745", fg="white", activebackground="#218838", activeforeground="white", relief=tk.FLAT, pady=8, command=self.start_transfer)
+        self.start_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
 
         # 3. 下部日志显示区
         bottom_frame = tk.Frame(self.root, bg=self.bg_color)
@@ -1045,12 +1072,37 @@ class QuarkGUITool:
             "baidu_cookie": self.baidu_cookie_entry.get().strip() if self.remember_var.get() else "",
             "remember": self.remember_var.get(),
             "keywords": self.kw_entry.get().strip(),
+            "font_size": self.base_font_size,
         }
         try:
             with open(self.CONFIG_FILE, "w", encoding="utf-8") as f:
-                json.dump(config_data, f, ensure_ascii=False, indent=2)
+                json.dump(config_data, f, ensure_ascii=False, indent=4)
         except Exception as e:
             logging.error(f"保存配置失败: {e}")
+
+    def zoom_in(self, event=None):
+        self.base_font_size = min(24, self.base_font_size + 1)
+        self.update_font_sizes()
+
+    def zoom_out(self, event=None):
+        self.base_font_size = max(8, self.base_font_size - 1)
+        self.update_font_sizes()
+
+    def reset_zoom(self, event=None):
+        self.base_font_size = 10
+        self.update_font_sizes()
+
+    def on_mousewheel_zoom(self, event):
+        if event.delta > 0:
+            self.zoom_in()
+        elif event.delta < 0:
+            self.zoom_out()
+
+    def update_font_sizes(self):
+        self.font_normal.configure(size=self.base_font_size)
+        self.font_title.configure(size=self.base_font_size, weight="bold")
+        self.font_button.configure(size=self.base_font_size + 1, weight="bold")
+        self.save_config()
 
     def load_values_from_config(self):
         if self.config:
@@ -1567,6 +1619,16 @@ class QuarkGUITool:
 
 
 if __name__ == '__main__':
+    # 启用 Windows 高 DPI 适配，防止界面模糊或缩放异常
+    try:
+        from ctypes import windll
+        windll.shcore.SetProcessDpiAwareness(1)
+    except Exception:
+        try:
+            windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
     root = tk.Tk()
     app = QuarkGUITool(root)
     root.mainloop()
