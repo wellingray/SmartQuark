@@ -42,6 +42,13 @@ RESOURCE_EXTS = {
 }
 AD_EXTS = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.html', '.url', '.lnk'}
 PROMO_CHARS = ['群', '领', '众', '信', '微', '扫', '码', '加', '粉', '福利']
+PROMOTIONAL_FOLDER_PATTERNS = (
+    r'追更',
+    r'每日更新',
+    r'更新就速存',
+    r'点我',
+    r'更[①1一][哈啥]',
+)
 
 
 def clean_filename(filename, keywords):
@@ -106,8 +113,16 @@ def has_domain_pattern(name):
     return re.search(DOMAIN_PATTERN, name, re.IGNORECASE) is not None
 
 
+def is_promotional_folder(name):
+    normalized_name = re.sub(r'\s+', '', name)
+    return any(re.search(pattern, normalized_name, re.IGNORECASE) for pattern in PROMOTIONAL_FOLDER_PATTERNS)
+
+
 def classify_file_action(name, size, is_dir, blacklist_keywords):
     """Return (action, new_name): action is keep, rename, or delete."""
+    if is_dir and is_promotional_folder(name):
+        return "delete", None
+
     is_sensitive = any(kw and kw in name for kw in blacklist_keywords)
     if not is_sensitive and has_domain_pattern(name):
         is_sensitive = True
@@ -184,13 +199,22 @@ def clean_ads_recursively(transfer, current_fid, book_name, blacklist_keywords, 
             file_item.get("file_type") == "dir"
         )
         
+        size = safe_int(file_item.get("size") or 0)
+        action, new_name = classify_file_action(name, size, is_dir, blacklist_keywords)
+        if action == "delete":
+            del_res = transfer.delete([fid])
+            if del_res and del_res.get("code") == 0:
+                label = "广告文件夹" if is_dir else "广告文件"
+                log_func(f"资源 [{book_name}] {label}已删除：[{name}]")
+            else:
+                log_func(f"资源 [{book_name}] 广告删除失败 [{name}]: {del_res}")
+            continue
+
         if is_dir:
             clean_ads_recursively(transfer, fid, book_name, blacklist_keywords, log_func, stop_flag=stop_flag)
             if stop_flag and stop_flag():
                 return
 
-        size = safe_int(file_item.get("size") or 0)
-        action, new_name = classify_file_action(name, size, is_dir, blacklist_keywords)
         if action == "keep":
             continue
         if action == "rename":
@@ -205,12 +229,6 @@ def clean_ads_recursively(transfer, current_fid, book_name, blacklist_keywords, 
                 log_func(f"资源 [{book_name}] {label}：[{name}] -> [{target_name}]")
             else:
                 log_func(f"资源 [{book_name}] 重命名失败 [{name}]: {rename_res}")
-        elif action == "delete":
-            del_res = transfer.delete([fid])
-            if del_res and del_res.get("code") == 0:
-                log_func(f"资源 [{book_name}] 广告文件已删除：[{name}]")
-            else:
-                log_func(f"资源 [{book_name}] 广告文件删除失败 [{name}]: {del_res}")
 
 
 def clean_baidu_ads_recursively(transfer, current_path, book_name, blacklist_keywords, log_func, stop_flag=None):
@@ -235,13 +253,22 @@ def clean_baidu_ads_recursively(transfer, current_path, book_name, blacklist_key
             str(file_item.get("isdir")) == "1"
         )
         
+        size = safe_int(file_item.get("size") or 0)
+        action, new_name = classify_file_action(name, size, is_dir, blacklist_keywords)
+        if action == "delete":
+            del_res = transfer.delete([path])
+            if del_res and del_res.get("errno") == 0:
+                label = "广告文件夹" if is_dir else "广告文件"
+                log_func(f"百度资源 [{book_name}] {label}已删除：[{name}]")
+            else:
+                log_func(f"百度资源 [{book_name}] 广告删除失败 [{name}]: {del_res}")
+            continue
+
         if is_dir:
             clean_baidu_ads_recursively(transfer, path, book_name, blacklist_keywords, log_func, stop_flag=stop_flag)
             if stop_flag and stop_flag():
                 return
 
-        size = safe_int(file_item.get("size") or 0)
-        action, new_name = classify_file_action(name, size, is_dir, blacklist_keywords)
         if action == "keep":
             continue
         if action == "rename":
@@ -257,12 +284,6 @@ def clean_baidu_ads_recursively(transfer, current_path, book_name, blacklist_key
                 log_func(f"百度资源 [{book_name}] {label}：[{name}] -> [{target_name}]")
             else:
                 log_func(f"百度资源 [{book_name}] 重命名失败 [{name}]: {rename_res}")
-        elif action == "delete":
-            del_res = transfer.delete([path])
-            if del_res and del_res.get("errno") == 0:
-                log_func(f"百度资源 [{book_name}] 广告文件已删除：[{name}]")
-            else:
-                log_func(f"百度资源 [{book_name}] 广告文件删除失败 [{name}]: {del_res}")
 
 
 class QuarkBatchTransfer:

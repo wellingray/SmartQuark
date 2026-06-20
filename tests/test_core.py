@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from smart_quark import clean_filename, parse_baidu_links, BaiduBatchTransfer
 from smart_quark import classify_file_action
+from smart_quark import clean_ads_recursively, clean_baidu_ads_recursively
 from smart_quark import sleep_with_stop
 from smart_quark import QuarkGUITool
 
@@ -520,6 +521,64 @@ class TestAdClassification(unittest.TestCase):
         action, new_name = classify_file_action("20250727-40652200.jpg", 120 * 1024, False, [])
         self.assertEqual(action, "keep")
         self.assertIsNone(new_name)
+
+    def test_update_promotion_folders_are_deleted(self):
+        names = ["更①哈", "⚠易知哈，每日更新就速存", "⚠追更点我"]
+        for name in names:
+            action, new_name = classify_file_action(name, 0, True, [])
+            self.assertEqual(action, "delete", name)
+            self.assertIsNone(new_name)
+
+    def test_normal_update_folder_is_kept(self):
+        action, new_name = classify_file_action("课程更新说明", 0, True, [])
+        self.assertEqual(action, "keep")
+        self.assertIsNone(new_name)
+
+
+class TestPromotionalFolderDeletion(unittest.TestCase):
+    """Promotional folders are deleted before their contents are listed."""
+
+    def test_quark_deletes_promotional_folder_without_recursing(self):
+        class Transfer(object):
+            def __init__(self):
+                self.list_calls = []
+                self.deleted = []
+
+            def ls_dir(self, fid):
+                self.list_calls.append(fid)
+                if fid != "root":
+                    raise AssertionError("promotional folder should not be traversed")
+                return {"code": 0, "data": {"list": [{"file_name": "⚠追更点我", "fid": "ad-folder", "dir": True}]}}
+
+            def delete(self, fids):
+                self.deleted.extend(fids)
+                return {"code": 0}
+
+        transfer = Transfer()
+        clean_ads_recursively(transfer, "root", "测试资源", [], lambda message: None)
+        self.assertEqual(transfer.list_calls, ["root"])
+        self.assertEqual(transfer.deleted, ["ad-folder"])
+
+    def test_baidu_deletes_promotional_folder_without_recursing(self):
+        class Transfer(object):
+            def __init__(self):
+                self.list_calls = []
+                self.deleted = []
+
+            def list_directory(self, path):
+                self.list_calls.append(path)
+                if path != "/root":
+                    raise AssertionError("promotional folder should not be traversed")
+                return [{"server_filename": "⚠易知哈，每日更新就速存", "path": "/root/ad", "isdir": 1}]
+
+            def delete(self, paths):
+                self.deleted.extend(paths)
+                return {"errno": 0}
+
+        transfer = Transfer()
+        clean_baidu_ads_recursively(transfer, "/root", "测试资源", [], lambda message: None)
+        self.assertEqual(transfer.list_calls, ["/root"])
+        self.assertEqual(transfer.deleted, ["/root/ad"])
 
 
 class TestInterruptibleSleep(unittest.TestCase):

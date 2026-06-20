@@ -50,6 +50,7 @@ This document defines project-scoped guidelines and rules for coding, building, 
   * **Small Document/Core Cleanup**: Any document or core file (such as `.docx`, `.pdf`, `.txt`, `.epub`, etc.) smaller than **100KB** that matches any sensitive blacklist keyword must be deleted automatically instead of renamed.
   * **Shortcut Cleanup**: Any `.html`, `.url`, or `.lnk` file is considered a promotion and must be deleted.
   * **Domain & Website Cleanup**: Detect domain/website name patterns (e.g., `cunlove.cn`, `www.xx.com`) in filenames. If found, treat the file as sensitive (delete if it's an image/shortcut/webpage/small-doc <100KB, or strip the domain name and any enclosing bracket like `【...domain...】` during renaming if it is a core resource >=100KB).
+  * **Update-Promotion Folder Cleanup**: Delete an entire folder without traversing it when its name clearly advertises update-following behavior, including 追更, 每日更新, 更新就速存, 点我, or 更①哈. Ordinary folders such as 课程更新说明 must not be deleted by this rule.
 
 ### 中文
 * **核心资源保护**：核心文件（如 `.mp4`, `.zip`, `.rar`, `.pdf`, `.epub` 等）**严禁直接删除**。若其文件名包含敏感词，应通过重命名将其剥离净化。
@@ -60,6 +61,7 @@ This document defines project-scoped guidelines and rules for coding, building, 
   * **小体积核心文档清理**：任何小于 **100KB** 且匹配到敏感词的核心资源（如 `.docx`, `.pdf`, `.txt`, `.epub` 等），必须自动执行物理删除，不再进行重命名。
   * **快捷链接清理**：任何 `.html`、`.url` 或 `.lnk` 文件均直接视为广告推广，一律自动物理删除。
   * **网址与域名清理**：自动检测文件名中的网址与域名特征（如 `cunlove.cn`、`www.xx.com`）。如果存在，一律判定为敏感广告（若为图片、网页或小于100KB的核心文档等则直接物理删除；若为大于等于100KB的核心资源文件，则在重命名时将域名及包含该域名的括号如 `【...域名...】` 整体进行剥离净化）。
+  * **更新引流文件夹清理**：文件夹名称明确包含“追更”“每日更新”“更新就速存”“点我”“更①哈”等更新引流特征时，不递归扫描其内容，直接删除整个文件夹。“课程更新说明”等普通目录不得因本规则被删除。
 
 ---
 
