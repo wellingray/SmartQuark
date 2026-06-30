@@ -32,22 +32,22 @@ elif hasattr(sys.stderr, 'buffer'):
 DOMAIN_TLDS = "com|cn|net|org|cc|info|xyz|me|top|vip|co|club|wang|run|pub|love|icu|work|site|online|link|fun|mobi|biz|win|space"
 DOMAIN_TLD_SET = set(DOMAIN_TLDS.split("|"))
 DOMAIN_PATTERN = r'(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+(?:' + DOMAIN_TLDS + r')'
-SEPARATORS = r' \-_+_\|｜'
+SEPARATORS = r' \-_+\|｜'
 RESOURCE_EXTS = {
     '.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.f4v', '.rmvb',
     '.mp3', '.wav', '.wma', '.aac', '.flac', '.m4a',
     '.zip', '.rar', '.7z', '.tar', '.gz',
-    '.pdf', '.epub', '.mobi', '.azw3', '.docx', '.xlsx', '.pptx',
+    '.pdf', '.epub', '.mobi', '.azw3', '.docx', '.xlsx', '.pptx', '.txt',
     '.exe', '.dmg', '.pkg', '.apk', '.iso'
 }
 AD_EXTS = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.html', '.url', '.lnk'}
 PROMO_CHARS = ['群', '领', '众', '信', '微', '扫', '码', '加', '粉', '福利']
 PROMOTIONAL_FOLDER_PATTERNS = (
-    r'追更',
-    r'每日更新',
+    r'^追更',
+    r'^每日更新',
     r'更新就速存',
-    r'点我',
-    r'更[①1一][哈啥]',
+    r'^点我',
+    r'^更[①1一][哈啥]',
 )
 
 
@@ -131,7 +131,7 @@ def classify_file_action(name, size, is_dir, blacklist_keywords):
     if not is_sensitive and not is_dir and ext in AD_EXTS:
         if ext in {'.html', '.url', '.lnk'}:
             is_sensitive = True
-        elif size > 0 and size < 150 * 1024 and any(c in name for c in PROMO_CHARS):
+        elif any(c in name for c in PROMO_CHARS):
             is_sensitive = True
         elif size > 0 and size < 100 * 1024:
             base_name = os.path.splitext(name)[0]
@@ -173,15 +173,150 @@ def sleep_with_stop(seconds, stop_flag=None, interval=0.2, sleep_func=time.sleep
     return not (stop_flag and stop_flag())
 
 
+def is_quark_dir(file_item):
+    return (
+        file_item.get("dir") is True or
+        str(file_item.get("dir")) == "1" or
+        str(file_item.get("dir")).lower() == "true" or
+        file_item.get("file_type") == "dir"
+    )
+
+
+def is_baidu_dir(file_item):
+    return (
+        file_item.get("isdir") == 1 or
+        str(file_item.get("isdir")) == "1"
+    )
+
+
+def get_quark_cleanup_items(transfer, current_fid, book_name, log_func, stop_flag=None, max_retries=3):
+    last_file_list = []
+    last_count = None
+    for attempt in range(1, max_retries + 1):
+        if stop_flag and stop_flag():
+            return []
+
+        contents = transfer.ls_dir(current_fid)
+        if contents and isinstance(contents, dict) and contents.get("code") == 0:
+            file_list = contents.get("data", {}).get("list", [])
+            if file_list:
+                current_count = len(file_list)
+                if last_count is None:
+                    if attempt < max_retries:
+                        log_func(f"资源 [{book_name}] 清理入口[{current_fid}] 识别为目录，本次扫描到 {current_count} 项，等待确认目录同步。")
+                        last_file_list = file_list
+                        last_count = current_count
+                        if not sleep_with_stop(1, stop_flag=stop_flag):
+                            return []
+                        continue
+                    log_func(f"资源 [{book_name}] 清理入口[{current_fid}] 识别为目录，本次扫描到 {current_count} 项。")
+                    return file_list
+
+                if current_count > last_count:
+                    if attempt < max_retries:
+                        log_func(f"资源 [{book_name}] 清理入口[{current_fid}] 目录项数量从 {last_count} 增至 {current_count}，继续确认目录同步。")
+                        last_file_list = file_list
+                        last_count = current_count
+                        if not sleep_with_stop(1, stop_flag=stop_flag):
+                            return []
+                        continue
+                    log_func(f"资源 [{book_name}] 清理入口[{current_fid}] 目录项数量从 {last_count} 增至 {current_count}，本次扫描到 {current_count} 项。")
+                    return file_list
+
+                stable_list = file_list if current_count >= last_count else last_file_list
+                log_func(f"资源 [{book_name}] 清理入口[{current_fid}] 目录项数量已稳定，本次扫描到 {len(stable_list)} 项。")
+                return stable_list
+
+        info = transfer.get_file_info(current_fid)
+        if info:
+            if is_quark_dir(info):
+                if attempt < max_retries:
+                    log_func(f"资源 [{book_name}] 清理入口[{current_fid}] 已识别为目录，但子项暂未完全可见，正在第 {attempt}/{max_retries} 次重试。")
+                    if not sleep_with_stop(1, stop_flag=stop_flag):
+                        return []
+                    continue
+                log_func(f"资源 [{book_name}] 清理入口[{current_fid}] 已识别为目录，但重试后仍未列出子项，跳过本轮清理。")
+                return []
+
+            log_func(f"资源 [{book_name}] 清理入口[{current_fid}] 识别为单文件兜底：[ {info.get('file_name', '')} ]。")
+            return [info]
+
+        if attempt < max_retries:
+            log_func(f"资源 [{book_name}] 清理入口[{current_fid}] 暂未取得文件列表或元信息，正在第 {attempt}/{max_retries} 次重试。")
+            if not sleep_with_stop(1, stop_flag=stop_flag):
+                return []
+
+    log_func(f"资源 [{book_name}] 清理入口[{current_fid}] 重试后仍无法取得内容，跳过本轮清理。")
+    return []
+
+
+def get_baidu_cleanup_items(transfer, current_path, book_name, log_func, stop_flag=None, max_retries=3):
+    last_file_list = []
+    last_count = None
+    for attempt in range(1, max_retries + 1):
+        if stop_flag and stop_flag():
+            return []
+
+        file_list = transfer.list_directory(current_path)
+        if file_list:
+            current_count = len(file_list)
+            if last_count is None:
+                if attempt < max_retries:
+                    log_func(f"百度资源 [{book_name}] 清理入口[{current_path}] 识别为目录，本次扫描到 {current_count} 项，等待确认目录同步。")
+                    last_file_list = file_list
+                    last_count = current_count
+                    if not sleep_with_stop(1, stop_flag=stop_flag):
+                        return []
+                    continue
+                log_func(f"百度资源 [{book_name}] 清理入口[{current_path}] 识别为目录，本次扫描到 {current_count} 项。")
+                return file_list
+
+            if current_count > last_count:
+                if attempt < max_retries:
+                    log_func(f"百度资源 [{book_name}] 清理入口[{current_path}] 目录项数量从 {last_count} 增至 {current_count}，继续确认目录同步。")
+                    last_file_list = file_list
+                    last_count = current_count
+                    if not sleep_with_stop(1, stop_flag=stop_flag):
+                        return []
+                    continue
+                log_func(f"百度资源 [{book_name}] 清理入口[{current_path}] 目录项数量从 {last_count} 增至 {current_count}，本次扫描到 {current_count} 项。")
+                return file_list
+
+            stable_list = file_list if current_count >= last_count else last_file_list
+            log_func(f"百度资源 [{book_name}] 清理入口[{current_path}] 目录项数量已稳定，本次扫描到 {len(stable_list)} 项。")
+            return stable_list
+
+        info = transfer.get_file_meta(current_path)
+        if info:
+            if is_baidu_dir(info):
+                if attempt < max_retries:
+                    log_func(f"百度资源 [{book_name}] 清理入口[{current_path}] 已识别为目录，但子项暂未完全可见，正在第 {attempt}/{max_retries} 次重试。")
+                    if not sleep_with_stop(1, stop_flag=stop_flag):
+                        return []
+                    continue
+                log_func(f"百度资源 [{book_name}] 清理入口[{current_path}] 已识别为目录，但重试后仍未列出子项，跳过本轮清理。")
+                return []
+
+            log_func(f"百度资源 [{book_name}] 清理入口[{current_path}] 识别为单文件兜底：[ {info.get('server_filename', '')} ]。")
+            return [info]
+
+        if attempt < max_retries:
+            log_func(f"百度资源 [{book_name}] 清理入口[{current_path}] 暂未取得文件列表或元信息，正在第 {attempt}/{max_retries} 次重试。")
+            if not sleep_with_stop(1, stop_flag=stop_flag):
+                return []
+
+    log_func(f"百度资源 [{book_name}] 清理入口[{current_path}] 重试后仍无法取得内容，跳过本轮清理。")
+    return []
+
+
 def clean_ads_recursively(transfer, current_fid, book_name, blacklist_keywords, log_func, stop_flag=None):
     if stop_flag and stop_flag():
         return
 
-    contents = transfer.ls_dir(current_fid)
-    if not contents or not isinstance(contents, dict) or contents.get("code") != 0:
+    file_list = get_quark_cleanup_items(transfer, current_fid, book_name, log_func, stop_flag=stop_flag)
+    if not file_list:
         return
     
-    file_list = contents.get("data", {}).get("list", [])
     for file_item in file_list:
         if stop_flag and stop_flag():
             return
@@ -192,12 +327,7 @@ def clean_ads_recursively(transfer, current_fid, book_name, blacklist_keywords, 
             continue
         
         # 判断是否是目录
-        is_dir = (
-            file_item.get("dir") is True or 
-            str(file_item.get("dir")) == "1" or 
-            str(file_item.get("dir")).lower() == "true" or
-            file_item.get("file_type") == "dir"
-        )
+        is_dir = is_quark_dir(file_item)
         
         size = safe_int(file_item.get("size") or 0)
         action, new_name = classify_file_action(name, size, is_dir, blacklist_keywords)
@@ -206,6 +336,8 @@ def clean_ads_recursively(transfer, current_fid, book_name, blacklist_keywords, 
             if del_res and del_res.get("code") == 0:
                 label = "广告文件夹" if is_dir else "广告文件"
                 log_func(f"资源 [{book_name}] {label}已删除：[{name}]")
+                # 文件夹删除后等待更长时间，确保服务器端彻底清理
+                sleep_with_stop(3 if is_dir else 1, stop_flag=stop_flag)
             else:
                 log_func(f"资源 [{book_name}] 广告删除失败 [{name}]: {del_res}")
             continue
@@ -235,7 +367,7 @@ def clean_baidu_ads_recursively(transfer, current_path, book_name, blacklist_key
     if stop_flag and stop_flag():
         return
 
-    file_list = transfer.list_directory(current_path)
+    file_list = get_baidu_cleanup_items(transfer, current_path, book_name, log_func, stop_flag=stop_flag)
     if not file_list:
         return
     
@@ -248,10 +380,7 @@ def clean_baidu_ads_recursively(transfer, current_path, book_name, blacklist_key
         if not name or not path:
             continue
         
-        is_dir = (
-            file_item.get("isdir") == 1 or
-            str(file_item.get("isdir")) == "1"
-        )
+        is_dir = is_baidu_dir(file_item)
         
         size = safe_int(file_item.get("size") or 0)
         action, new_name = classify_file_action(name, size, is_dir, blacklist_keywords)
@@ -260,6 +389,7 @@ def clean_baidu_ads_recursively(transfer, current_path, book_name, blacklist_key
             if del_res and del_res.get("errno") == 0:
                 label = "广告文件夹" if is_dir else "广告文件"
                 log_func(f"百度资源 [{book_name}] {label}已删除：[{name}]")
+                sleep_with_stop(3 if is_dir else 1, stop_flag=stop_flag)
             else:
                 log_func(f"百度资源 [{book_name}] 广告删除失败 [{name}]: {del_res}")
             continue
@@ -363,7 +493,8 @@ class QuarkBatchTransfer:
     def get_detail(self, pwd_id, stoken):
         list_merge = []
         page = 1
-        while True:
+        max_pages = 200
+        while page <= max_pages:
             url = f"{self.BASE_URL}/1/clouddrive/share/sharepage/detail"
             querystring = {
                 "pr": "ucpro",
@@ -424,7 +555,8 @@ class QuarkBatchTransfer:
     def ls_dir(self, pdir_fid):
         list_merge = []
         page = 1
-        while True:
+        max_pages = 200
+        while page <= max_pages:
             url = f"{self.BASE_URL}/1/clouddrive/file/sort"
             querystring = {
                 "pr": "ucpro",
@@ -453,6 +585,16 @@ class QuarkBatchTransfer:
             if len(list_merge) >= res_json.get("metadata", {}).get("_total", 0):
                 break
         return {"code": 0, "data": {"list": list_merge}}
+
+    def get_file_info(self, fid):
+        url = f"{self.BASE_URL}/1/clouddrive/file/get"
+        querystring = {"pr": "ucpro", "fr": "pc", "uc_param_str": "", "fid": fid}
+        resp = self._send_request("GET", url, params=querystring)
+        if resp and resp.status_code == 200:
+            res_json = resp.json()
+            if res_json.get("code") == 0 and res_json.get("data"):
+                return res_json["data"]
+        return None
 
     def delete(self, filelist):
         url = f"{self.BASE_URL}/1/clouddrive/file/delete"
@@ -549,7 +691,11 @@ def get_id_from_url(url: str) -> str:
 
 def get_app_dir():
     if getattr(sys, 'frozen', False):
-        return os.path.dirname(sys.executable)
+        # 打包后 exe 在 dist 子目录下，返回父目录确保配置写在项目根目录
+        parent = os.path.dirname(os.path.dirname(sys.executable))
+        if not parent:
+            parent = os.path.dirname(sys.executable)
+        return parent
     else:
         return os.path.dirname(os.path.abspath(__file__))
 
@@ -858,6 +1004,19 @@ class BaiduBatchTransfer:
             logging.error(f"list_directory 请求失败: {e}")
         return []
 
+    def get_file_meta(self, path):
+        path = path.rstrip('/')
+        if not path or path == "/":
+            return None
+        import posixpath
+        parent_dir = posixpath.dirname(path)
+        name = posixpath.basename(path)
+        items = self.list_directory(parent_dir)
+        for item in items:
+            if item.get("path") == path or item.get("server_filename") == name:
+                return item
+        return None
+
     def rename(self, path, newname):
         url = f"{self.BASE_URL}/api/filemanager"
         params = {
@@ -1006,7 +1165,7 @@ class QuarkGUITool:
         tk.Label(top_frame, text="广告敏感词 (逗号分隔):", font=self.font_normal, bg=self.bg_color).grid(row=2, column=3, sticky=tk.E, padx=5, pady=5)
         self.kw_entry = ttk.Entry(top_frame, font=self.font_normal)
         self.kw_entry.grid(row=2, column=4, columnspan=2, sticky=tk.EW, padx=5, pady=5)
-        self.kw_entry.insert(0, "微信,扫码,获取更多,更多资源,加群,进群,领取,公众号,防走失,防失联,加好友,福利,5分打印,必看,必读,加微,更多课程,免费大放送,更多整理")
+        self.kw_entry.insert(0, "微信,扫码,获取更多,更多资源,加群,进群,领取,公众号,防走失,防失联,加好友,福利,5分打印,必看,必读,加微,更多课程,免费大放送,更多整理,更多免费资源,免费资源群,点开传送,资源汇总,免费资源,免费提供,持续更新")
 
         # 2. 底部操作栏
         btn_frame = tk.Frame(self.root, bg=self.bg_color)
@@ -1136,7 +1295,7 @@ class QuarkGUITool:
             
             if self.config.get("keywords"):
                 saved_kws = [k.strip() for k in self.config.get("keywords").split(",") if k.strip()]
-                defaults = ["微信", "扫码", "获取更多", "更多资源", "加群", "进群", "领取", "公众号", "防走失", "防失联", "加好友", "福利", "5分打印", "必看", "必读", "加微", "更多课程", "免费大放送", "更多整理"]
+                defaults = ["微信", "扫码", "获取更多", "更多资源", "加群", "进群", "领取", "公众号", "防走失", "防失联", "加好友", "福利", "5分打印", "必看", "必读", "加微", "更多课程", "免费大放送", "更多整理", "更多免费资源", "免费资源群", "点开传送", "资源汇总", "免费资源", "免费提供", "持续更新"]
                 for d in defaults:
                     if d not in saved_kws:
                         saved_kws.append(d)

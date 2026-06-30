@@ -467,6 +467,16 @@ class TestAdClassification(unittest.TestCase):
         self.assertEqual(action, "delete")
         self.assertIsNone(new_name)
 
+    def test_large_real_world_promo_png_is_deleted(self):
+        action, new_name = classify_file_action(
+            "扫码进群，免费领取2027小初高全套资料.png",
+            int(1.2 * 1024 * 1024),
+            False,
+            ["扫码", "进群", "领取"],
+        )
+        self.assertEqual(action, "delete")
+        self.assertIsNone(new_name)
+
     def test_small_promo_image_is_deleted_without_full_keyword(self):
         action, new_name = classify_file_action("资料群.png", 100 * 1024, False, ["公众号"])
         self.assertEqual(action, "delete")
@@ -523,7 +533,7 @@ class TestAdClassification(unittest.TestCase):
         self.assertIsNone(new_name)
 
     def test_update_promotion_folders_are_deleted(self):
-        names = ["更①哈", "⚠易知哈，每日更新就速存", "⚠追更点我"]
+        names = ["更①哈", "⚠易知哈，每日更新就速存", "追更点我"]
         for name in names:
             action, new_name = classify_file_action(name, 0, True, [])
             self.assertEqual(action, "delete", name)
@@ -533,6 +543,57 @@ class TestAdClassification(unittest.TestCase):
         action, new_name = classify_file_action("课程更新说明", 0, True, [])
         self.assertEqual(action, "keep")
         self.assertIsNone(new_name)
+
+    def test_small_txt_ad_is_deleted(self):
+        # 240B txt file with ad keyword should be deleted
+        action, new_name = classify_file_action("更多免费资源汇总每日更新-点开传送.txt", 240, False, ["更多免费资源", "点开传送"])
+        self.assertEqual(action, "delete")
+        self.assertIsNone(new_name)
+
+    def test_promo_image_over_150kb_under_500kb_deleted(self):
+        # 232.3KB image with promo char should be deleted (threshold raised to 500KB)
+        action, new_name = classify_file_action("进免费资源群加：honormovies.JPG", int(232.3 * 1024), False, ["免费资源群"])
+        self.assertEqual(action, "delete")
+        self.assertIsNone(new_name)
+
+    def test_promo_image_300kb_with_promo_chars_deleted(self):
+        # 300KB image with single promo char should be deleted under new 500KB threshold
+        action, new_name = classify_file_action("资料群分享.jpg", 300 * 1024, False, ["公众号"])
+        self.assertEqual(action, "delete")
+        self.assertIsNone(new_name)
+
+    def test_promo_image_over_500kb_with_promo_chars_still_deleted(self):
+        # 600KB image with promo char should now be deleted (no size limit on promo char images)
+        action, new_name = classify_file_action("资料群.jpg", 600 * 1024, False, ["公众号"])
+        self.assertEqual(action, "delete")
+        self.assertIsNone(new_name)
+
+    def test_large_image_no_promo_chars_kept(self):
+        # 600KB image WITHOUT promo chars and no keyword should be kept
+        action, new_name = classify_file_action("课程截图.jpg", 600 * 1024, False, ["公众号"])
+        self.assertEqual(action, "keep")
+        self.assertIsNone(new_name)
+
+    def test_promotional_folder_no_false_positive(self):
+        # "请点我看详情" should NOT be deleted (点我 must be at start)
+        action, new_name = classify_file_action("请点我看详情", 0, True, [])
+        self.assertEqual(action, "keep")
+        self.assertIsNone(new_name)
+
+    def test_point_me_at_start_is_deleted(self):
+        # "点我查看" SHOULD be deleted (点我 at start)
+        action, new_name = classify_file_action("点我查看", 0, True, [])
+        self.assertEqual(action, "delete")
+        self.assertIsNone(new_name)
+
+    def test_mp4_with_free_provided_keyword_is_renamed(self):
+        # Large mp4 with "免费提供" ad suffix should be renamed, not deleted
+        action, new_name = classify_file_action(
+            "31.可套用文案模板一：如何写好一个IP故事【持续更新|免费提供：Cunworknotess】.mp4",
+            50 * 1024 * 1024, False, ["免费提供", "持续更新"]
+        )
+        self.assertEqual(action, "rename")
+        self.assertEqual(new_name, "31.可套用文案模板一：如何写好一个IP故事.mp4")
 
 
 class TestPromotionalFolderDeletion(unittest.TestCase):
@@ -548,7 +609,7 @@ class TestPromotionalFolderDeletion(unittest.TestCase):
                 self.list_calls.append(fid)
                 if fid != "root":
                     raise AssertionError("promotional folder should not be traversed")
-                return {"code": 0, "data": {"list": [{"file_name": "⚠追更点我", "fid": "ad-folder", "dir": True}]}}
+                return {"code": 0, "data": {"list": [{"file_name": "追更点我", "fid": "ad-folder", "dir": True}]}}
 
             def delete(self, fids):
                 self.deleted.extend(fids)
@@ -556,7 +617,7 @@ class TestPromotionalFolderDeletion(unittest.TestCase):
 
         transfer = Transfer()
         clean_ads_recursively(transfer, "root", "测试资源", [], lambda message: None)
-        self.assertEqual(transfer.list_calls, ["root"])
+        self.assertEqual(transfer.list_calls, ["root", "root"])
         self.assertEqual(transfer.deleted, ["ad-folder"])
 
     def test_baidu_deletes_promotional_folder_without_recursing(self):
@@ -577,8 +638,184 @@ class TestPromotionalFolderDeletion(unittest.TestCase):
 
         transfer = Transfer()
         clean_baidu_ads_recursively(transfer, "/root", "测试资源", [], lambda message: None)
-        self.assertEqual(transfer.list_calls, ["/root"])
+        self.assertEqual(transfer.list_calls, ["/root", "/root"])
         self.assertEqual(transfer.deleted, ["/root/ad"])
+
+    def test_quark_deletes_top_level_ad_file_when_ls_dir_fails(self):
+        class Transfer(object):
+            def __init__(self):
+                self.deleted = []
+                self.info_calls = []
+
+            def ls_dir(self, fid):
+                return {"code": 1, "message": "not dir"}
+
+            def get_file_info(self, fid):
+                self.info_calls.append(fid)
+                return {
+                    "file_name": "扫码进群，免费领取2027小初高全套资料.png",
+                    "fid": fid,
+                    "size": int(1.2 * 1024 * 1024),
+                    "dir": False,
+                }
+
+            def delete(self, fids):
+                self.deleted.extend(fids)
+                return {"code": 0}
+
+        transfer = Transfer()
+        clean_ads_recursively(transfer, "top-file", "测试资源", ["扫码"], lambda message: None)
+        self.assertEqual(transfer.info_calls, ["top-file"])
+        self.assertEqual(transfer.deleted, ["top-file"])
+
+    def test_baidu_deletes_top_level_ad_file_when_list_directory_returns_empty(self):
+        class Transfer(object):
+            def __init__(self):
+                self.deleted = []
+                self.meta_calls = []
+
+            def list_directory(self, path):
+                return []
+
+            def get_file_meta(self, path):
+                self.meta_calls.append(path)
+                return {
+                    "server_filename": "扫码进群，免费领取2027小初高全套资料.png",
+                    "path": path,
+                    "size": int(1.2 * 1024 * 1024),
+                    "isdir": 0,
+                }
+
+            def delete(self, paths):
+                self.deleted.extend(paths)
+                return {"errno": 0}
+
+        transfer = Transfer()
+        clean_baidu_ads_recursively(transfer, "/root/top-file.png", "测试资源", ["扫码"], lambda message: None)
+        self.assertEqual(transfer.meta_calls, ["/root/top-file.png"])
+        self.assertEqual(transfer.deleted, ["/root/top-file.png"])
+
+    @patch("smart_quark.sleep_with_stop", return_value=True)
+    def test_quark_retries_until_delayed_directory_items_appear(self, _mock_sleep):
+        class Transfer(object):
+            def __init__(self):
+                self.list_calls = 0
+                self.deleted = []
+
+            def ls_dir(self, fid):
+                self.list_calls += 1
+                if self.list_calls == 1:
+                    return {"code": 0, "data": {"list": []}}
+                return {
+                    "code": 0,
+                    "data": {
+                        "list": [{
+                            "file_name": "扫码进群，免费领取2027小初高全套资料.png",
+                            "fid": "delayed-ad",
+                            "dir": False,
+                            "size": int(1.2 * 1024 * 1024),
+                        }]
+                    }
+                }
+
+            def get_file_info(self, fid):
+                return {
+                    "file_name": "已同步目录",
+                    "fid": fid,
+                    "dir": True,
+                    "file_type": "dir",
+                }
+
+            def delete(self, fids):
+                self.deleted.extend(fids)
+                return {"code": 0}
+
+        logs = []
+        transfer = Transfer()
+        clean_ads_recursively(transfer, "delayed-dir", "测试资源", ["扫码"], logs.append)
+        self.assertEqual(transfer.list_calls, 3)
+        self.assertEqual(transfer.deleted, ["delayed-ad"])
+        self.assertTrue(any("正在第 1/3 次重试" in message for message in logs))
+        self.assertTrue(any("本次扫描到 1 项" in message for message in logs))
+
+    @patch("smart_quark.sleep_with_stop", return_value=True)
+    def test_quark_retries_until_partial_directory_listing_stabilizes(self, _mock_sleep):
+        class Transfer(object):
+            def __init__(self):
+                self.list_calls = 0
+                self.deleted = []
+
+            def ls_dir(self, fid):
+                self.list_calls += 1
+                file_list = [
+                    {"file_name": "2027《初中地理·必刷题》8上(RJ).pdf", "fid": "pdf-1", "dir": False, "size": 245 * 1024 * 1024},
+                    {"file_name": "2027《初中地理·必刷题》8上(RJ)答案.pdf", "fid": "pdf-2", "dir": False, "size": 172 * 1024 * 1024},
+                    {"file_name": "2027《初中地理·必刷题》8上(RJ)狂K重点.pdf", "fid": "pdf-3", "dir": False, "size": 208 * 1024 * 1024},
+                ]
+                if self.list_calls >= 2:
+                    file_list.append({
+                        "file_name": "扫码进群，免费领取2027小初高全套资料.png",
+                        "fid": "delayed-ad",
+                        "dir": False,
+                        "size": int(1.2 * 1024 * 1024),
+                    })
+                return {"code": 0, "data": {"list": file_list}}
+
+            def get_file_info(self, fid):
+                return {
+                    "file_name": "测试目录",
+                    "fid": fid,
+                    "dir": True,
+                    "file_type": "dir",
+                }
+
+            def delete(self, fids):
+                self.deleted.extend(fids)
+                return {"code": 0}
+
+        logs = []
+        transfer = Transfer()
+        clean_ads_recursively(transfer, "partial-dir", "测试资源", ["扫码"], logs.append)
+        self.assertEqual(transfer.deleted, ["delayed-ad"])
+        self.assertGreaterEqual(transfer.list_calls, 2)
+        self.assertTrue(any("目录项数量从 3 增至 4" in message for message in logs))
+
+    @patch("smart_quark.sleep_with_stop", return_value=True)
+    def test_baidu_retries_until_delayed_directory_items_appear(self, _mock_sleep):
+        class Transfer(object):
+            def __init__(self):
+                self.list_calls = 0
+                self.deleted = []
+
+            def list_directory(self, path):
+                self.list_calls += 1
+                if self.list_calls == 1:
+                    return []
+                return [{
+                    "server_filename": "扫码进群，免费领取2027小初高全套资料.png",
+                    "path": "/root/delayed-ad.png",
+                    "isdir": 0,
+                    "size": int(1.2 * 1024 * 1024),
+                }]
+
+            def get_file_meta(self, path):
+                return {
+                    "server_filename": "已同步目录",
+                    "path": path,
+                    "isdir": 1,
+                }
+
+            def delete(self, paths):
+                self.deleted.extend(paths)
+                return {"errno": 0}
+
+        logs = []
+        transfer = Transfer()
+        clean_baidu_ads_recursively(transfer, "/root/delayed-dir", "测试资源", ["扫码"], logs.append)
+        self.assertEqual(transfer.list_calls, 3)
+        self.assertEqual(transfer.deleted, ["/root/delayed-ad.png"])
+        self.assertTrue(any("正在第 1/3 次重试" in message for message in logs))
+        self.assertTrue(any("本次扫描到 1 项" in message for message in logs))
 
 
 class TestInterruptibleSleep(unittest.TestCase):
